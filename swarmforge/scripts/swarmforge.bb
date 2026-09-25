@@ -144,7 +144,7 @@
 
 (def receive-modes #{"task" "batch"})
 (def propagation-modes #{"forward-only" "back-one" "back-all"})
-(def known-agents #{"claude" "codex" "copilot" "grok"})
+(def known-agents #{"claude" "codex" "copilot" "grok" "pi"})
 
 (defn receive-fields [trailing]
   (let [[receive-mode after-receive]
@@ -520,6 +520,10 @@
                                  "--name " (sq (str "SwarmForge " display)) " "
                                  (yolo-flag agent row) (extra-args-prefix row)
                                  (when initial-prompt? (str "-i " prompt)))
+                  "pi" (str "pi --append-system-prompt " (sq (str prompt-file)) " "
+                            "-n " (sq (str "SwarmForge " display)) " "
+                            (extra-args-prefix row)
+                            (when initial-prompt? prompt))
                   "grok" (str "grok --cwd " (sq (str role-worktree)) " "
                               (grok-permission-prefix row) (extra-args-prefix row)
                               "--minimal --rules " prompt

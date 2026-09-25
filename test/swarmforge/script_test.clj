@@ -376,6 +376,44 @@
       (finally
         (fs/delete-tree root)))))
 
+(deftest pi-launch-command-appends-role-prompt-and-passes-initial-prompt
+  ;; Given a pack role configured for pi with provider arguments
+  ;; When SwarmForge builds the launch command
+  ;; Then pi appends the role prompt file, names the session, keeps the extra
+  ;; arguments, and starts with the role prompt as the first message
+  (let [root (tmp-dir)]
+    (try
+      (let [command (:out (run {:dir root}
+                               (script "swarmforge.bb")
+                               "--test-launch-command"
+                               (str root)
+                               "pi"
+                               "--provider anthropic"))]
+        (is (str/includes? command "pi --append-system-prompt "))
+        (is (str/includes? command ".swarmforge/prompts/coder.md"))
+        (is (re-find #"-n 'SwarmForge Coder' --provider anthropic \"\$\(cat " command))
+        (is (fs/exists? (fs/path root ".swarmforge/prompts/coder.md"))))
+      (finally
+        (fs/delete-tree root)))))
+
+(deftest swarmforge-launcher-accepts-pi-agent
+  ;; Given a conf that assigns a role to pi
+  ;; When the launcher parses it
+  ;; Then the role is accepted instead of rejected as an unsupported agent
+  (let [root (tmp-dir)]
+    (try
+      (write-file (fs/path root "swarmforge/constitution.prompt") "Read articles.\n")
+      (write-file (fs/path root "swarmforge/swarmforge.conf")
+                  (str "window coder claude master\n"
+                       "window refactorer pi refactorer task back-one\n"))
+      (write-file (fs/path root "swarmforge/roles/coder.prompt") "coder\n")
+      (write-file (fs/path root "swarmforge/roles/refactorer.prompt") "refactorer\n")
+      (let [result (run {:dir root :ok? false} (script "swarmforge.bb") "--test-parse" (str root))]
+        (is (zero? (:exit result)) (:err result))
+        (is (str/includes? (:out result) "refactorer Refactorer")))
+      (finally
+        (fs/delete-tree root)))))
+
 (deftest start-pack-web-drops-stale-dashboard-url
   ;; Given a leftover dashboard-url and pack_web.pid from a prior run
   ;; When SwarmForge prepares to start the dashboard
