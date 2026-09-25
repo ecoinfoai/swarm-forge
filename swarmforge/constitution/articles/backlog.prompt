@@ -1,0 +1,18 @@
+# Backlog Rules
+
+## Source Of Truth
+- Every board card names one Backlog.md task id, for example `TASK-12`. If the card names none, ask through clarification before any work.
+- Read the task with `backlog task view <id> --plain`. Its acceptance criteria are the behavior contract; do not widen scope beyond them.
+- Use the `backlog` CLI for every read and write. Never hand-edit files under `backlog/`. Never open `backlog board`; its TUI drops keystrokes.
+
+## Recording
+- Record your step on the card's task before your `git_handoff`, and commit the `backlog/` changes in your own commit.
+- Append only. Tag every comment with your role: `backlog task edit <id> --comment "<text>" --comment-author <role>`.
+- Edit only the card's task. Work found outside its scope becomes a new task: `backlog task create "<title>" --plain --desc "Found in <id>." --ac "<observable outcome>"`. Never edit another existing task.
+- Merge-only handbacks need no record.
+
+## Per Role
+- specifier: set `--status "In Progress"`; comment the feature files written and the clarifications settled.
+- coder: `--check-ac <n>` for each criterion whose acceptance scenarios pass; `--append-notes` with a short implementation summary.
+- refactorer: comment the coverage, CRAP, and DRY results and any structural moves.
+- architect: file residual structural work as new tasks labeled `arch`; record decisions that outlive the card with `backlog decision create "<title>" --plain`; then `--append-final-summary` and `--status Done` on the card's task.
