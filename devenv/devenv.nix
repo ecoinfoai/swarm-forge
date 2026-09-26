@@ -11,7 +11,6 @@ in
     pkgs.babashka
     pkgs.quarto
     pkgs.claude-code
-    pkgs.codex
     pkgs.pi-coding-agent
     backlog-md
   ];
