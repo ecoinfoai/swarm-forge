@@ -1,7 +1,7 @@
 # Project Rules
 
 ## Project Shape
-- This project is configured for SwarmForge with four Codex-backed agents: specifier, coder, refactorer, and architect.
+- This project is configured for SwarmForge with four agents, all on Claude: specifier, coder, refactorer, and architect.
 - Project language: Babashka.
 
 ## Local Configuration
