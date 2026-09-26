@@ -2,6 +2,10 @@
 # their bodies change. Roles keep the recipes for the checks they own correct.
 # Run one at a time: the tools share caches and must not run concurrently.
 
+# SwarmForge installs the APS tools (gherkin-parser, gherkin-mutator) here and
+# puts them on the agents' PATH only; recipes must work the same for the operator.
+export PATH := justfile_directory() + "/.swarmforge/bin:" + env_var("PATH")
+
 # Standard verification suite.
 check: test property acceptance
 
