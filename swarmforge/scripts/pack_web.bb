@@ -571,7 +571,9 @@
         window (nth row 4 nil)]
     (if (str/blank? window)
       session
-      (str session ":" window ".0"))))
+      ;; No pane index: the agent window has one pane, and a hardcoded .0
+      ;; misses it when the user's tmux sets pane-base-index 1.
+      (str session ":" window))))
 
 (defn backend-name [row]
   (str/lower-case (or (nth row 5 nil) "")))

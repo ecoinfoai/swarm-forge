@@ -879,7 +879,8 @@
 (deftest inject-master-records-send-keys-argv
   ;; Given master session swarmforge-specifier in roles.tsv
   ;; When --test-inject-argv records the would-be tmux argv
-  ;; Then it send-keys -l the text to that session, then C-m
+  ;; Then it send-keys -l the text to that session's agent window, then C-m,
+  ;; without a pane index so tmux pane-base-index 1 users are reached too
   (let [root (tmp-dir)
         argv-file (str (fs/path root "tmux.argv"))
         sock (str (fs/path root "tmux.sock"))
@@ -891,11 +892,11 @@
     (let [result (pack-web root false "--test-inject-argv" (str root) argv-file text)
           argv (read-argv argv-file)]
       (is (zero? (:exit result)))
-      (is (= ["tmux" "-S" sock "send-keys" "-t" "swarmforge-specifier:Specifier.0" "-l" text]
+      (is (= ["tmux" "-S" sock "send-keys" "-t" "swarmforge-specifier:Specifier" "-l" text]
              (first argv)))
-      (is (= ["tmux" "-S" sock "send-keys" "-t" "swarmforge-specifier:Specifier.0" "C-m"]
+      (is (= ["tmux" "-S" sock "send-keys" "-t" "swarmforge-specifier:Specifier" "C-m"]
              (second argv)))
-      (is (= ["tmux" "-S" sock "send-keys" "-t" "swarmforge-specifier:Specifier.0" "C-j"]
+      (is (= ["tmux" "-S" sock "send-keys" "-t" "swarmforge-specifier:Specifier" "C-j"]
              (nth argv 2))))))
 
 (deftest pack-web-post-task-queues-a-note-for-master
