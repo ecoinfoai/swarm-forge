@@ -19,6 +19,7 @@ in
   # never trigger direnv, so the swarm must be started from inside this shell.
   scripts.swarm-up.exec = ''exec "$DEVENV_ROOT/swarm" "$@"'';
   scripts.swarm-watch.exec = ''exec bash ${./swarm-watch.sh} "$@"'';
+  scripts.swarm-status.exec = ''exec bash ${./swarm-status.sh} "$@"'';
   # The launcher only knows macOS `open`, so the dashboard never opens on Linux.
   scripts.dash.exec = ''exec xdg-open "$(cat "$DEVENV_ROOT/.swarmforge/dashboard-url")"'';
   scripts.board.exec = ''exec backlog browser "$@"'';
