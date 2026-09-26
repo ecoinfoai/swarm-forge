@@ -1,0 +1,6 @@
+# Command Rules
+- `justfile` at the project root is the single list of project commands. Run every check through its recipe, never by retyping the command behind it: `just test`, `just property`, `just acceptance`, `just coverage`, `just crap`, `just dry`, `just mutate`, `just gherkin-mutate`, `just docs`, and `just check` for the standard suite.
+- Recipe names are fixed across projects; only their bodies change. Do not rename or remove a recipe.
+- Keep the recipes for the checks you own correct, in your own commit: the coder owns `test` and `acceptance`; the refactorer owns `property`, `coverage`, `crap`, and `dry`; the architect owns `mutate`, `gherkin-mutate`, and `docs`.
+- A recipe that exits with "not wired yet" is its owner's to define when that owner builds what it runs. Any other role that finds a recipe missing or wrong reports it in its handoff instead of editing it.
+- Recipes stay non-interactive and run one at a time.
