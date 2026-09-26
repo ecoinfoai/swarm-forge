@@ -10,6 +10,7 @@ in
     pkgs.tmux
     pkgs.babashka
     pkgs.quarto
+    pkgs.just
     pkgs.claude-code
     pkgs.pi-coding-agent
     backlog-md

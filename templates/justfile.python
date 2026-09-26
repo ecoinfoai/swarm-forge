@@ -1,0 +1,43 @@
+# Project commands. Recipe names are the same in every swarm project; only
+# their bodies change. Roles keep the recipes for the checks they own correct.
+# Run one at a time: the tools share caches and must not run concurrently.
+
+# Standard verification suite.
+check: test property acceptance
+
+# Unit tests.
+test:
+    uv run pytest -q
+
+# Property tests.
+property:
+    uv run pytest tests/property -q
+
+# Every feature through the acceptance pipeline.
+acceptance:
+    @echo "acceptance: not wired yet; the coder defines it with the acceptance pipeline" >&2; exit 1
+
+# Coverage report.
+coverage:
+    uv run pytest --cov --cov-report=term-missing
+
+# Cyclomatic complexity, read together with coverage for CRAP.
+crap:
+    uv run radon cc -s $(git ls-files '*.py')
+
+# Duplicate code.
+dry:
+    uv run pylint --disable=all --enable=duplicate-code $(git ls-files '*.py')
+
+# Differential language mutation.
+mutate:
+    uv run mutmut run --max-children 4
+    uv run mutmut results
+
+# Soft Gherkin acceptance mutation.
+gherkin-mutate:
+    @echo "gherkin-mutate: not wired yet; the architect defines it with the mutation runner" >&2; exit 1
+
+# Render the Quarto site.
+docs:
+    quarto render docs
