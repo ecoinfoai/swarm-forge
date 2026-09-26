@@ -1,0 +1,6 @@
+# Documentation Rules
+- `docs/` is a Quarto website: `docs/_quarto.yml` with `project: type: website`, pages as `.qmd`. Create it if it is missing.
+- The architect owns `docs/`; other roles do not edit it.
+- When the architect handles a card, it updates the pages the card affected: what each module is for, its boundaries, how to run it, and links to the Backlog decisions behind it.
+- Keep pages descriptive; do not add executable code cells.
+- Run `just docs` and fix every error. Do not commit `docs/_site/` or `docs/.quarto/`.
