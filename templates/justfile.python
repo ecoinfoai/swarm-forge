@@ -42,6 +42,10 @@ mutate:
 gherkin-mutate:
     @echo "gherkin-mutate: not wired yet; the architect defines it with the mutation runner" >&2; exit 1
 
+# End-to-end QA suite through the user interface (six-pack QA role).
+qa:
+    @echo "qa: not wired yet; the QA role defines it with the end-to-end suite" >&2; exit 1
+
 # Render the Quarto site.
 docs:
     quarto render docs
