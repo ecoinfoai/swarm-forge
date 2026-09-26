@@ -33,7 +33,12 @@ in
 
   # Agent panes inherit the tmux server's environment, and the role worktrees
   # never trigger direnv, so the swarm must be started from inside this shell.
-  scripts.swarm-up.exec = ''exec "$DEVENV_ROOT/swarm" "$@"'';
+  scripts.swarm-up.exec = ''
+    "$DEVENV_ROOT/swarm" "$@" || exit $?
+    setsid nohup swarm-watchdog >/dev/null 2>&1 &
+    echo "Watchdog started: stalled roles are re-woken automatically (swarm-status shows it)."
+  '';
+  scripts.swarm-watchdog.exec = ''exec bash ${./swarm-watchdog.sh} "$@"'';
   scripts.swarm-watch.exec = ''exec bash ${./swarm-watch.sh} "$@"'';
   scripts.swarm-status.exec = ''exec bash ${./swarm-status.sh} "$@"'';
   # The launcher only knows macOS `open`, so the dashboard never opens on Linux.

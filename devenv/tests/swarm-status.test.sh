@@ -83,5 +83,35 @@ expect_match "$(tmux -S "$sock" capture-pane -p -t swarmforge-coder)" 'new hando
 expect_no_match "$(tmux -S "$sock" capture-pane -p -t swarmforge-architect)" 'new handoff mail' "idle role without mail is left alone"
 cleanup
 
+# 8: stalled roles as a plain list
+make_swarm "coder:idle_screen:1:0" "refactorer:busy_screen:0:1" "architect:idle_screen:0:0"
+expect_match "$(status --list-stalled)" '^coder$' "list-stalled prints the stalled role"
+[[ "$(status --list-stalled | wc -l)" -eq 1 ]] || fail "list-stalled prints only stalled roles"
+cleanup
+
+# 9: --wake with names wakes only those still stalled
+make_swarm "coder:idle_screen:1:0" "architect:idle_screen:1:0" "refactorer:idle_screen:0:0"
+status --wake architect refactorer >/dev/null
+sleep 0.5
+expect_match "$(tmux -S "$sock" capture-pane -p -t swarmforge-architect)" 'new handoff mail' "named stalled role is woken"
+expect_no_match "$(tmux -S "$sock" capture-pane -p -t swarmforge-coder)" 'new handoff mail' "unnamed stalled role is left alone"
+expect_no_match "$(tmux -S "$sock" capture-pane -p -t swarmforge-refactorer)" 'new handoff mail' "named role that is not stalled is left alone"
+cleanup
+
+# 10: status reports the watchdog
+make_swarm "coder:idle_screen:0:0"
+expect_match "$(status)" 'Watchdog: not running' "a missing watchdog is reported"
+cleanup
+
+# 11: a fresh swarm has not created every queue directory yet
+make_swarm "coder:idle_screen:1:0"
+rm -rf "$root/wt-coder/.swarmforge/handoffs/inbox/in_process" \
+       "$root/.swarmforge/handoffs/pending_approval" "$root/.swarmforge/dashboard" "$root/.swarmforge/board"
+out="$(status)"; code=$?
+[[ $code -eq 0 ]] || fail "missing queue directories do not fail the report (exit $code)"
+expect_match "$out" '^coder +STALLED +1 +0' "missing directories count as empty"
+expect_match "$(status --list-stalled)" '^coder$' "list-stalled survives missing directories"
+cleanup
+
 if ((failures)); then echo "$failures failure(s)"; exit 1; fi
 echo "all swarm-status tests passed"
