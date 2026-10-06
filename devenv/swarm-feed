@@ -1,0 +1,289 @@
+#!/usr/bin/env python3
+"""Feed Backlog.md tasks to a running SwarmForge pack, one card at a time.
+
+A card is created for the next open task only when the previous card is done,
+no handoff is queued anywhere, and nothing waits for the operator. With
+--auto-approve the specification gate is released without the operator.
+
+    swarm-feed --label pilot                 # operator still approves specifications
+    swarm-feed --label pilot --auto-approve  # unattended
+    swarm-feed --label pilot --auto-approve --until TASK-3
+
+Exit codes: 0 finished, 1 stopped because the operator is needed or the swarm
+is not running, 2 invalid usage.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+DONE_STATUS = "Done"
+OPEN_STATUS = "To Do"
+DONE_LANE = "done"
+
+CARD_TEXT = (
+    "Implement backlog task {task_id}. Read it with `backlog task view {task_id} --plain`.\n"
+    "Its acceptance criteria are the source of truth. Resolve ambiguity from the task\n"
+    "description and its references, and record each assumption as a task comment.\n"
+    "Ask through clarification only when the acceptance criteria contradict each other.\n"
+    "Do not widen scope beyond the task."
+)
+
+
+@dataclass(frozen=True)
+class Task:
+    id: str
+    title: str
+    status: str
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    """What the feeder sees in one poll."""
+
+    live_cards: list[str]
+    board_names: set[str]
+    approvals: list[str]
+    clarifications: int
+    queued_handoffs: int
+    tasks: list[Task]
+
+
+@dataclass(frozen=True)
+class Action:
+    kind: str  # wait | approve | feed | finished | stop
+    reason: str = ""
+    task_id: str = ""
+    card: str = ""
+    approvals: list[str] = field(default_factory=list)
+    needs_operator: bool = False
+
+
+def card_name(task_id: str, title: str) -> str:
+    """Builds the board card name for a task, e.g. `task-1-ingest-pilot-regulations`."""
+    number = task_id.split("-")[-1].lower()
+    words = [w for w in re.split(r"[^a-z0-9]+", title.lower()) if w][:3]
+    return "-".join(["task", number, *words])
+
+
+def decide(snap: Snapshot, *, auto_approve: bool, until: str | None, quiet_polls: int, settle: int) -> Action:
+    """Chooses the next step from one snapshot.
+
+    Args:
+        snap: State of the board, the handoff queues and the Backlog tasks.
+        auto_approve: Release pending specification approvals without the operator.
+        until: Last task id to feed, or None for all tasks.
+        quiet_polls: Consecutive polls, including this one, in which the swarm was idle.
+        settle: Idle polls required before a card is created.
+    """
+    if snap.approvals:
+        if auto_approve:
+            return Action("approve", approvals=list(snap.approvals))
+        return Action("wait", "a specification waits for approval in the dashboard", needs_operator=True)
+    if snap.clarifications:
+        return Action("wait", "an agent's question waits for an answer in the dashboard", needs_operator=True)
+    if snap.live_cards:
+        return Action("wait", f"card in progress: {snap.live_cards[0]}")
+    if snap.queued_handoffs:
+        return Action("wait", "handoffs are still being delivered")
+    if quiet_polls < settle:
+        return Action("wait", "confirming that the swarm is idle")
+
+    open_tasks = [t for t in snap.tasks if t.status != DONE_STATUS]
+    if not open_tasks:
+        return Action("finished", "every task is done")
+    nxt = open_tasks[0]
+    if until is not None:
+        order = [t.id for t in snap.tasks]
+        if order.index(nxt.id) > order.index(until):
+            return Action("finished", f"reached {until}")
+    if nxt.status != OPEN_STATUS:
+        return Action("stop", f"{nxt.id} is '{nxt.status}' but no card is in progress")
+    name = card_name(nxt.id, nxt.title)
+    if name in snap.board_names:
+        return Action("stop", f"card {name} already ran but {nxt.id} is not '{DONE_STATUS}'")
+    return Action("feed", task_id=nxt.id, card=name)
+
+
+class SwarmUnavailable(Exception):
+    """The swarm's dashboard cannot be reached."""
+
+
+def http_json(url: str, payload: dict | None = None) -> dict:
+    data = None if payload is None else json.dumps(payload).encode()
+    request = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"},
+                                     method="GET" if payload is None else "POST")
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(f"{url} answered {error.code}: {error.read().decode(errors='replace')}") from error
+    except (urllib.error.URLError, OSError) as error:
+        raise SwarmUnavailable(f"dashboard not reachable at {url}: {error}") from error
+
+
+def dashboard_url(root: Path) -> str:
+    file = root / ".swarmforge" / "dashboard-url"
+    if not file.is_file():
+        raise SwarmUnavailable(f"no running swarm in {root} (start it with swarm-up)")
+    return file.read_text().strip()
+
+
+def count_handoffs(directory: Path) -> int:
+    return len(list(directory.glob("*.handoff"))) if directory.is_dir() else 0
+
+
+def queued_handoffs(root: Path) -> int:
+    """Counts handoffs waiting in any role's inbox or outbox."""
+    roles_file = root / ".swarmforge" / "roles.tsv"
+    if not roles_file.is_file():
+        raise SwarmUnavailable(f"no running swarm in {root} (missing {roles_file})")
+    worktrees = {Path(line.split("\t")[2]) for line in roles_file.read_text().splitlines() if line.strip()}
+    total = 0
+    for worktree in worktrees | {root}:
+        handoffs = worktree / ".swarmforge" / "handoffs"
+        total += sum(count_handoffs(handoffs / part) for part in ("inbox/new", "inbox/in_process", "outbox"))
+    return total
+
+
+def backlog_tasks(label: str | None) -> list[Task]:
+    command = ["backlog", "task", "list", "--json", "--sort", "ordinal"]
+    if label:
+        command += ["-l", label]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"backlog task list failed: {result.stderr.strip() or result.stdout.strip()}")
+    return [Task(t["id"], t["title"], t["status"]) for t in json.loads(result.stdout)["tasks"]]
+
+
+def read_snapshot(root: Path, url: str, label: str | None) -> Snapshot:
+    state = http_json(url + "/api/state")
+    if "tasks" not in state:
+        raise SwarmUnavailable(f"dashboard reports: {state.get('error', state)}")
+    cards = state["tasks"]
+    pending = root / ".swarmforge" / "dashboard" / "clarifications" / "pending"
+    return Snapshot(
+        live_cards=[c["name"] for c in cards if c.get("lane") != DONE_LANE],
+        board_names={c["name"] for c in cards},
+        approvals=[a["id"] for a in state.get("approvals", [])],
+        clarifications=len(list(pending.iterdir())) if pending.is_dir() else 0,
+        queued_handoffs=queued_handoffs(root),
+        tasks=backlog_tasks(label),
+    )
+
+
+def log(root: Path, message: str) -> None:
+    line = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {message}"
+    print(line, flush=True)
+    state = root / ".swarmforge"
+    if state.is_dir():
+        with open(state / "feed.log", "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+
+
+def notify(message: str) -> None:
+    if os.environ.get("SWARM_FEED_NOTIFY") == "0" or not shutil.which("notify-send"):
+        return
+    subprocess.run(["notify-send", "swarm-feed", message], check=False, capture_output=True)
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="swarm-feed", description=__doc__.split("\n\n")[0])
+    parser.add_argument("--label", help="feed only Backlog tasks with this label")
+    parser.add_argument("--auto-approve", action="store_true",
+                        help="release specification approvals without the operator")
+    parser.add_argument("--until", metavar="TASK-ID", help="stop after this task is done")
+    parser.add_argument("--interval", type=int, default=60, help="seconds between polls (default 60)")
+    parser.add_argument("--settle", type=int, default=2,
+                        help="consecutive idle polls required before feeding (default 2)")
+    parser.add_argument("--once", action="store_true", help="poll once and exit")
+    parser.add_argument("--dry-run", action="store_true", help="report the next step without doing it")
+    args = parser.parse_args(argv)
+    if args.interval < 1 or args.settle < 1:
+        parser.error("--interval and --settle must be at least 1")
+    return args
+
+
+def run(args: argparse.Namespace, root: Path) -> int:
+    quiet_polls = 0
+    last_reason = ""
+    while True:
+        url = dashboard_url(root)
+        snap = read_snapshot(root, url, args.label)
+        if args.until and args.until not in [t.id for t in snap.tasks]:
+            print(f"swarm-feed: --until {args.until} is not among the selected tasks", file=sys.stderr)
+            return 2
+        idle = not (snap.approvals or snap.clarifications or snap.live_cards or snap.queued_handoffs)
+        quiet_polls = quiet_polls + 1 if idle else 0
+        action = decide(snap, auto_approve=args.auto_approve, until=args.until,
+                        quiet_polls=quiet_polls, settle=args.settle)
+
+        if action.kind == "finished":
+            log(root, f"finished: {action.reason}")
+            notify(f"finished: {action.reason}")
+            return 0
+        if action.kind == "stop":
+            log(root, f"stopped, operator needed: {action.reason}")
+            notify(f"stopped: {action.reason}")
+            return 1
+        if action.kind == "approve":
+            for approval in action.approvals:
+                if args.dry_run:
+                    log(root, f"dry run: would approve {approval}")
+                else:
+                    http_json(f"{url}/api/approvals/{urllib.parse.quote(approval, safe='')}/approve", {})
+                    log(root, f"approved specification {approval}")
+        elif action.kind == "feed":
+            if args.dry_run:
+                log(root, f"dry run: would create card {action.card} for {action.task_id}")
+            else:
+                http_json(url + "/api/tasks",
+                          {"name": action.card, "text": CARD_TEXT.format(task_id=action.task_id)})
+                log(root, f"created card {action.card} for {action.task_id}")
+            quiet_polls = 0
+        elif action.reason != last_reason:
+            log(root, f"waiting: {action.reason}")
+            if action.needs_operator:
+                notify(action.reason)
+        last_reason = action.reason if action.kind == "wait" else ""
+
+        if args.once:
+            return 0
+        time.sleep(args.interval)
+
+
+def main(argv: list[str]) -> int:
+    args = parse_args(argv)
+    root_env = os.environ.get("DEVENV_ROOT")
+    if not root_env:
+        print("swarm-feed: must run inside the project devenv shell (DEVENV_ROOT is not set)", file=sys.stderr)
+        return 2
+    root = Path(root_env)
+    try:
+        return run(args, root)
+    except SwarmUnavailable as error:
+        log(root, f"stopped: {error}")
+        return 1
+    except RuntimeError as error:
+        log(root, f"stopped: {error}")
+        notify(f"stopped: {error}")
+        return 1
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

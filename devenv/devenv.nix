@@ -39,6 +39,10 @@ in
     echo "Watchdog started: stalled roles are re-woken automatically (swarm-status shows it)."
   '';
   scripts.swarm-watchdog.exec = ''exec bash ${./swarm-watchdog.sh} "$@"'';
+  # Creates the card for the next Backlog task once the previous card is done,
+  # so the operator does not have to start every task by hand. The script uses
+  # only the standard library, so it does not depend on the project's Python.
+  scripts.swarm-feed.exec = ''exec ${pkgs.python3}/bin/python3 ${./swarm-feed} "$@"'';
   scripts.swarm-watch.exec = ''exec bash ${./swarm-watch.sh} "$@"'';
   scripts.swarm-status.exec = ''exec bash ${./swarm-status.sh} "$@"'';
   # The launcher only knows macOS `open`, so the dashboard never opens on Linux.
