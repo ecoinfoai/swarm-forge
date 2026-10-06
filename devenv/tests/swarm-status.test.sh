@@ -13,6 +13,7 @@ expect_no_match() { grep -qE -- "$2" <<<"$1" && fail "$3 (unexpected /$2/)"; ret
 
 busy_screen='✽ Percolating… (14s · ↓ 904 tokens · thinking with high effort)'
 idle_screen='✻ Churned for 3m 8s · done'
+shell_screen=$'✻ Worked for 52s · done · 2 shells still running\n  ⏵⏵ bypass permissions on · 2 shells · ← for agents'
 
 # Builds a project with one role per argument "role:screen:new:in_process".
 make_swarm() {
@@ -165,6 +166,16 @@ sleep 0.5
 expect_match "$(tmux -S "$sock" capture-pane -p -t swarmforge-architect)" 'task-4-search is still in your lane' "the lane owner is told to continue"
 expect_no_match "$(tmux -S "$sock" capture-pane -p -t swarmforge-architect)" 'new handoff mail' "an orphan is not told about mail it does not have"
 expect_no_match "$(tmux -S "$sock" capture-pane -p -t swarmforge-coder)" 'still in your lane' "other roles are left alone"
+cleanup
+
+# 15: an agent waiting on its own background shell is working, not orphaned or stalled
+make_swarm "coder:idle_screen:0:0" "architect:shell_screen:0:0"
+card task-4-search architect
+[[ "$(orphans)" -eq 0 ]] || fail "a role with background shells running is not orphaned"
+expect_match "$(status)" '^architect +busy' "a role with background shells running is busy"
+cleanup
+make_swarm "coder:idle_screen:0:0" "architect:shell_screen:1:0"
+expect_match "$(status)" '^architect +STALLED' "waiting mail still stalls a role that has background shells"
 cleanup
 
 if ((failures)); then echo "$failures failure(s)"; exit 1; fi

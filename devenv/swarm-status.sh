@@ -47,6 +47,10 @@ busy() { tmux -S "$sock" capture-pane -p -t "$1" | grep -qE '…[[:space:]]*\([0
 approvals="$(count "$state/handoffs/pending_approval")"
 clarifications="$(count "$state/dashboard/clarifications/pending" '*')"
 
+# Claude Code shows "<n> shell(s)" in its status line while the agent waits on a
+# background command it started; such a role will wake itself when that ends.
+on_shell() { tmux -S "$sock" capture-pane -p -t "$1" | grep -qE '[0-9]+ shells?[[:space:]]+(still running|·)'; }
+
 rows=()
 stalled_roles=()
 declare -A session_of=() any_session=()
@@ -66,6 +70,9 @@ while IFS=$'\t' read -r role _ worktree session _; do
     status=STALLED
     stalled_roles+=("$role")
     session_of[$role]="$session"
+  elif on_shell "$session"; then
+    status=busy
+    busy_roles=$(( busy_roles + 1 ))
   else
     status=idle
   fi
