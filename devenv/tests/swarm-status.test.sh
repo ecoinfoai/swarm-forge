@@ -113,5 +113,59 @@ expect_match "$out" '^coder +STALLED +1 +0' "missing directories count as empty"
 expect_match "$(status --list-stalled)" '^coder$' "list-stalled survives missing directories"
 cleanup
 
+# 12: a live card whose every role is idle is orphaned; the lane owner is named
+card() { printf '%s\t%s\n' "$1" "$2" > "$root/.swarmforge/board/tasks.tsv"; }
+make_swarm "coder:idle_screen:0:0" "architect:idle_screen:0:0"
+card task-4-search architect
+expect_match "$(status --list-orphaned)" '^architect$' "list-orphaned names the lane owner"
+out="$(status)"
+expect_match "$out" 'Orphaned: task-4-search .*architect' "the table reports the orphaned card"
+expect_no_match "$out" 'Stalled:' "an orphaned card is not a mail stall"
+cleanup
+
+# 13: anything that explains the silence means the card is not orphaned
+orphans() { status --list-orphaned | wc -l; }
+make_swarm "coder:idle_screen:0:0" "architect:busy_screen:0:0"
+card task-4-search coder
+[[ "$(orphans)" -eq 0 ]] || fail "a working role means the card is not orphaned"
+cleanup
+make_swarm "coder:idle_screen:1:0" "architect:idle_screen:0:0"
+card task-4-search architect
+[[ "$(orphans)" -eq 0 ]] || fail "mail in an inbox is a stall, not an orphan"
+cleanup
+make_swarm "coder:idle_screen:0:0" "architect:idle_screen:0:0"
+card task-4-search architect
+mkdir -p "$root/wt-coder/.swarmforge/handoffs/outbox"; : > "$root/wt-coder/.swarmforge/handoffs/outbox/o.handoff"
+[[ "$(orphans)" -eq 0 ]] || fail "a handoff still in an outbox is in flight"
+cleanup
+make_swarm "coder:idle_screen:0:0" "architect:idle_screen:0:0"
+card task-4-search architect
+: > "$root/.swarmforge/handoffs/pending_approval/50_x.handoff"
+[[ "$(orphans)" -eq 0 ]] || fail "a pending approval means the card waits for the operator"
+cleanup
+make_swarm "coder:idle_screen:0:0" "architect:idle_screen:0:0"
+card task-4-search architect
+: > "$root/.swarmforge/dashboard/clarifications/pending/clar-1.request"
+[[ "$(orphans)" -eq 0 ]] || fail "a pending clarification means the card waits for the operator"
+cleanup
+make_swarm "coder:idle_screen:0:0" "architect:idle_screen:0:0"
+card task-4-search done
+[[ "$(orphans)" -eq 0 ]] || fail "a done card is not orphaned"
+cleanup
+make_swarm "coder:idle_screen:0:0" "architect:idle_screen:0:0"
+card task-4-search nowhere
+[[ "$(orphans)" -eq 0 ]] || fail "a lane no role owns is never woken"
+cleanup
+
+# 14: --wake nudges the orphaned lane owner with a continue message, not the mail one
+make_swarm "coder:idle_screen:0:0" "architect:idle_screen:0:0"
+card task-4-search architect
+status --wake >/dev/null
+sleep 0.5
+expect_match "$(tmux -S "$sock" capture-pane -p -t swarmforge-architect)" 'task-4-search is still in your lane' "the lane owner is told to continue"
+expect_no_match "$(tmux -S "$sock" capture-pane -p -t swarmforge-architect)" 'new handoff mail' "an orphan is not told about mail it does not have"
+expect_no_match "$(tmux -S "$sock" capture-pane -p -t swarmforge-coder)" 'still in your lane' "other roles are left alone"
+cleanup
+
 if ((failures)); then echo "$failures failure(s)"; exit 1; fi
 echo "all swarm-status tests passed"

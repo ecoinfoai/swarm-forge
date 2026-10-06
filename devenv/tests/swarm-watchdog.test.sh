@@ -51,5 +51,19 @@ wait_for '! kill -0 "$wd" 2>/dev/null' || fail "the watchdog exits when the swar
 [[ ! -e "$root/.swarmforge/watchdog.pid" ]] || fail "the pid file is removed on exit"
 kill "$wd" 2>/dev/null; rm -rf "$root"
 
+# 8: an orphaned card is woken only after SWARM_WATCHDOG_ORPHAN_CHECKS consecutive checks
+orphan_woken() { grep -qE 'woke architect \(idle card\)' "$root/.swarmforge/watchdog.log" 2>/dev/null; }
+make_swarm "coder:idle_screen:0:0" "architect:idle_screen:0:0"
+printf 'task-4-search\tarchitect\n' > "$root/.swarmforge/board/tasks.tsv"
+DEVENV_ROOT="$root" SWARM_WATCHDOG_INTERVAL=1 SWARM_WATCHDOG_ORPHAN_CHECKS=3 bash "$watchdog" &
+wd=$!
+sleep 2.2
+orphan_woken && fail "an orphan is not woken before its check threshold"
+wait_for 'orphan_woken' || fail "an orphaned card's lane owner is woken after the threshold"
+continue_on_screen() { tmux -S "$sock" capture-pane -p -S -200 -t swarmforge-architect | grep -q 'task-4-search is still in your lane'; }
+wait_for 'continue_on_screen' || fail "the orphan receives the continue message"
+(( $(wakes_in coder) == 0 )) || fail "roles that do not own the lane are not woken"
+kill "$wd" 2>/dev/null; wait "$wd" 2>/dev/null; cleanup
+
 if ((failures)); then echo "$failures failure(s)"; exit 1; fi
 echo "all swarm-watchdog tests passed"

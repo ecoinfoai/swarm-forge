@@ -4,6 +4,8 @@
 A card is created for the next open task only when the previous card is done,
 no handoff is queued anywhere, and nothing waits for the operator. With
 --auto-approve the specification gate is released without the operator.
+When a card stays in a role's lane while every role is idle for --stuck-after
+minutes, it is reported to the operator (the watchdog wakes that role first).
 
     swarm-feed --label pilot                 # operator still approves specifications
     swarm-feed --label pilot --auto-approve  # unattended
@@ -17,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -60,6 +63,7 @@ class Snapshot:
     clarifications: int
     queued_handoffs: int
     tasks: list[Task]
+    orphaned: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -79,7 +83,13 @@ def card_name(task_id: str, title: str) -> str:
     return "-".join(["task", number, *words])
 
 
-def decide(snap: Snapshot, *, auto_approve: bool, until: str | None, quiet_polls: int, settle: int) -> Action:
+def orphan_limit(minutes: int, interval: int) -> int:
+    """Converts the --stuck-after minutes into a whole number of polls."""
+    return math.ceil(minutes * 60 / interval)
+
+
+def decide(snap: Snapshot, *, auto_approve: bool, until: str | None, quiet_polls: int, settle: int,
+           orphan_polls: int = 0, orphan_limit: int = 10) -> Action:
     """Chooses the next step from one snapshot.
 
     Args:
@@ -88,6 +98,8 @@ def decide(snap: Snapshot, *, auto_approve: bool, until: str | None, quiet_polls
         until: Last task id to feed, or None for all tasks.
         quiet_polls: Consecutive polls, including this one, in which the swarm was idle.
         settle: Idle polls required before a card is created.
+        orphan_polls: Consecutive polls in which a card sat in a lane with every role idle.
+        orphan_limit: Polls after which that is reported to the operator.
     """
     if snap.approvals:
         if auto_approve:
@@ -95,6 +107,9 @@ def decide(snap: Snapshot, *, auto_approve: bool, until: str | None, quiet_polls
         return Action("wait", "a specification waits for approval in the dashboard", needs_operator=True)
     if snap.clarifications:
         return Action("wait", "an agent's question waits for an answer in the dashboard", needs_operator=True)
+    if snap.live_cards and snap.orphaned and orphan_polls >= orphan_limit:
+        return Action("wait", f"card {snap.live_cards[0]} is in {snap.orphaned[0]}'s lane but every role is idle",
+                      needs_operator=True)
     if snap.live_cards:
         return Action("wait", f"card in progress: {snap.live_cards[0]}")
     if snap.queued_handoffs:
@@ -159,6 +174,18 @@ def queued_handoffs(root: Path) -> int:
     return total
 
 
+def orphaned_roles(root: Path) -> list[str]:
+    """Asks swarm-status which lane owners hold a card while every role is idle."""
+    command = os.environ.get("SWARM_STATUS", "swarm-status")
+    if shutil.which(command) is None:
+        raise RuntimeError(f"{command} not found; run swarm-feed inside the project devenv shell")
+    result = subprocess.run([command, "--list-orphaned"], capture_output=True, text=True, check=False,
+                            env={**os.environ, "DEVENV_ROOT": str(root)})
+    if result.returncode != 0:
+        raise RuntimeError(f"{command} --list-orphaned failed: {result.stderr.strip() or result.stdout.strip()}")
+    return result.stdout.split()
+
+
 def backlog_tasks(label: str | None) -> list[Task]:
     command = ["backlog", "task", "list", "--json", "--sort", "ordinal"]
     if label:
@@ -182,6 +209,7 @@ def read_snapshot(root: Path, url: str, label: str | None) -> Snapshot:
         clarifications=len(list(pending.iterdir())) if pending.is_dir() else 0,
         queued_handoffs=queued_handoffs(root),
         tasks=backlog_tasks(label),
+        orphaned=orphaned_roles(root),
     )
 
 
@@ -207,18 +235,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         help="release specification approvals without the operator")
     parser.add_argument("--until", metavar="TASK-ID", help="stop after this task is done")
     parser.add_argument("--interval", type=int, default=60, help="seconds between polls (default 60)")
+    parser.add_argument("--stuck-after", type=int, default=10, metavar="MINUTES",
+                        help="report a card nobody works on after this many minutes (default 10)")
     parser.add_argument("--settle", type=int, default=2,
                         help="consecutive idle polls required before feeding (default 2)")
     parser.add_argument("--once", action="store_true", help="poll once and exit")
     parser.add_argument("--dry-run", action="store_true", help="report the next step without doing it")
     args = parser.parse_args(argv)
-    if args.interval < 1 or args.settle < 1:
-        parser.error("--interval and --settle must be at least 1")
+    if args.interval < 1 or args.settle < 1 or args.stuck_after < 1:
+        parser.error("--interval, --settle and --stuck-after must be at least 1")
     return args
 
 
 def run(args: argparse.Namespace, root: Path) -> int:
     quiet_polls = 0
+    orphan_polls = 0
+    limit = orphan_limit(args.stuck_after, args.interval)
     last_reason = ""
     while True:
         url = dashboard_url(root)
@@ -228,8 +260,10 @@ def run(args: argparse.Namespace, root: Path) -> int:
             return 2
         idle = not (snap.approvals or snap.clarifications or snap.live_cards or snap.queued_handoffs)
         quiet_polls = quiet_polls + 1 if idle else 0
+        orphan_polls = orphan_polls + 1 if snap.orphaned else 0
         action = decide(snap, auto_approve=args.auto_approve, until=args.until,
-                        quiet_polls=quiet_polls, settle=args.settle)
+                        quiet_polls=quiet_polls, settle=args.settle,
+                        orphan_polls=orphan_polls, orphan_limit=limit)
 
         if action.kind == "finished":
             log(root, f"finished: {action.reason}")

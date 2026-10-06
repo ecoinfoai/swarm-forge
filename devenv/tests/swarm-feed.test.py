@@ -128,6 +128,60 @@ class DecideTest(unittest.TestCase):
         self.assertEqual((action.kind, action.task_id), ("feed", "TASK-1"))
 
 
+class OrphanedCardTest(unittest.TestCase):
+    def stuck(self, **kwargs):
+        return decide(snapshot(live_cards=["task-4-search"], orphaned=["architect"]), **kwargs)
+
+    def test_card_nobody_works_on_warns_the_operator_after_the_limit(self):
+        action = self.stuck(orphan_polls=5, orphan_limit=5)
+        self.assertEqual((action.kind, action.needs_operator), ("wait", True))
+        self.assertIn("architect", action.reason)
+
+    def test_card_nobody_works_on_only_waits_before_the_limit(self):
+        action = self.stuck(orphan_polls=4, orphan_limit=5)
+        self.assertEqual((action.kind, action.needs_operator), ("wait", False))
+
+    def test_warning_text_is_stable_so_it_is_logged_once(self):
+        self.assertEqual(self.stuck(orphan_polls=5, orphan_limit=5).reason,
+                         self.stuck(orphan_polls=9, orphan_limit=5).reason)
+
+    def test_pending_approval_is_not_reported_as_orphaned(self):
+        action = decide(snapshot(live_cards=["c"], orphaned=["architect"], approvals=["a1"]),
+                        orphan_polls=9, orphan_limit=5)
+        self.assertIn("approval", action.reason)
+
+    def test_limit_converts_minutes_to_whole_polls(self):
+        self.assertEqual(feed.orphan_limit(10, 60), 10)
+        self.assertEqual(feed.orphan_limit(10, 45), 14)
+
+
+class OrphanedRolesTest(unittest.TestCase):
+    def run_with_status(self, body: str):
+        with tempfile.TemporaryDirectory() as tmp:
+            stub = Path(tmp) / "swarm-status"
+            stub.write_text("#!/bin/sh\n" + body)
+            stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
+            old = os.environ.get("SWARM_STATUS")
+            os.environ["SWARM_STATUS"] = str(stub)
+            try:
+                return feed.orphaned_roles(Path(tmp))
+            finally:
+                if old is None:
+                    del os.environ["SWARM_STATUS"]
+                else:
+                    os.environ["SWARM_STATUS"] = old
+
+    def test_reads_the_lane_owners_swarm_status_reports(self):
+        self.assertEqual(self.run_with_status('[ "$1" = --list-orphaned ] && echo architect\n'), ["architect"])
+
+    def test_nothing_orphaned_is_an_empty_list(self):
+        self.assertEqual(self.run_with_status("exit 0\n"), [])
+
+    def test_a_failing_swarm_status_stops_the_feeder(self):
+        with self.assertRaises(RuntimeError):
+            self.run_with_status("echo broken >&2; exit 3\n")
+
+
 ROLES = ["specifier", "coder", "refactorer", "architect"]
 
 
@@ -154,6 +208,9 @@ class DashboardIntegrationTest(unittest.TestCase):
         stub = bin_dir / "backlog"
         stub.write_text(f"#!/bin/sh\ncat '{self.tasks_file}'\n")
         stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+        status_stub = bin_dir / "swarm-status"
+        status_stub.write_text("#!/bin/sh\nexit 0\n")
+        status_stub.chmod(status_stub.stat().st_mode | stat.S_IEXEC)
         self.env = dict(os.environ, DEVENV_ROOT=str(self.root),
                         PATH=f"{bin_dir}:{os.environ['PATH']}", SWARM_FEED_NOTIFY="0")
 
