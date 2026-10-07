@@ -178,5 +178,11 @@ make_swarm "coder:idle_screen:0:0" "architect:shell_screen:1:0"
 expect_match "$(status)" '^architect +STALLED' "waiting mail still stalls a role that has background shells"
 cleanup
 
+# 16: another role's leftover background shell must not hide the lane owner's stall
+make_swarm "coder:shell_screen:0:0" "architect:idle_screen:0:0"
+card task-8-search architect
+expect_match "$(status --list-orphaned)" '^architect$' "a bystander's background shell does not hide an orphaned card"
+cleanup
+
 if ((failures)); then echo "$failures failure(s)"; exit 1; fi
 echo "all swarm-status tests passed"

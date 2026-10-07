@@ -53,7 +53,7 @@ on_shell() { tmux -S "$sock" capture-pane -p -t "$1" | grep -qE '[0-9]+ shells?[
 
 rows=()
 stalled_roles=()
-declare -A session_of=() any_session=()
+declare -A session_of=() any_session=() shell_roles=()
 busy_roles=0
 queued=0
 while IFS=$'\t' read -r role _ worktree session _; do
@@ -72,7 +72,7 @@ while IFS=$'\t' read -r role _ worktree session _; do
     session_of[$role]="$session"
   elif on_shell "$session"; then
     status=busy
-    busy_roles=$(( busy_roles + 1 ))
+    shell_roles[$role]=1
   else
     status=idle
   fi
@@ -80,12 +80,13 @@ while IFS=$'\t' read -r role _ worktree session _; do
 done < "$state/roles.tsv"
 
 # Roles are the only lanes an agent can be woken in; "done" and unknown lanes
-# are not an agent's to finish.
+# are not an agent's to finish. Only the lane owner's own background shell
+# excuses it: another role's leftover shell must not hide a stalled card.
 orphan_cards=()
 declare -A orphan_of=()
 if (( busy_roles + queued + approvals + clarifications == 0 )) && [[ -r "$state/board/tasks.tsv" ]]; then
   while IFS=$'\t' read -r name lane _; do
-    [[ -n "$name" && -n "${any_session[$lane]:-}" ]] || continue
+    [[ -n "$name" && -n "${any_session[$lane]:-}" && -z "${shell_roles[$lane]:-}" ]] || continue
     orphan_of[$lane]="$name"
     orphan_cards+=("$name")
   done < "$state/board/tasks.tsv"
